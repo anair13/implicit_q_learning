@@ -13,6 +13,16 @@ from actor import update as awr_update_actor
 from common import Batch, InfoDict, Model, PRNGKey
 from critic import update_q, update_v
 
+# from sklearn.tree import DecisionTreeRegressor, DecisionTreeClassifier
+# from sklearn.datasets import load_boston, load_breast_cancer
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_squared_error
+# from sklearn.model_selection import train_test_split
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.metrics import accuracy_score, mean_absolute_error
+from collections import Counter
+import numpy as np
+import time
 
 def target_update(critic: Model, target_critic: Model, tau: float) -> Model:
     new_target_params = jax.tree_multimap(
@@ -31,8 +41,9 @@ def _update_jit(
 
     new_value, value_info = update_v(target_critic, value, batch, expectile)
     key, rng = jax.random.split(rng)
-    new_actor, actor_info = awr_update_actor(key, actor, target_critic,
-                                             new_value, batch, temperature)
+    # new_actor, actor_info = awr_update_actor(key, actor, target_critic,
+                                            #  new_value, batch, temperature)
+    new_actor, actor_info = None, {}
 
     new_critic, critic_info = update_q(critic, new_value, batch, discount)
 
@@ -69,6 +80,8 @@ class Learner(object):
         self.tau = tau
         self.discount = discount
         self.temperature = temperature
+
+        self.actor_estimator = None
 
         rng = jax.random.PRNGKey(seed)
         rng, actor_key, critic_key, value_key = jax.random.split(rng, 4)
@@ -112,7 +125,7 @@ class Learner(object):
         self.target_critic = target_critic
         self.rng = rng
 
-    def sample_actions(self,
+    def sample_nn_actions(self,
                        observations: np.ndarray,
                        temperature: float = 1.0) -> jnp.ndarray:
         rng, actions = policy.sample_actions(self.rng, self.actor.apply_fn,
@@ -122,6 +135,22 @@ class Learner(object):
 
         actions = np.asarray(actions)
         return np.clip(actions, -1, 1)
+    
+    def sample_actions(self,
+                       observations: np.ndarray,
+                       temperature: float = 1.0) -> jnp.ndarray:
+        # rng, actions = policy.sample_actions(self.rng, self.actor.apply_fn,
+        #                                      self.actor.params, observations,
+        #                                      temperature)
+        # self.rng = rng
+
+        if self.actor_estimator:
+            actions = self.actor_estimator.predict(observations[None, :])[0, :]
+        else:
+            actions = self.sample_nn_actions(observations, temperature)
+            # this shouldn't happen
+        actions = np.asarray(actions)
+        return np.clip(actions, -1, 1)
 
     def update(self, batch: Batch) -> InfoDict:
         new_rng, new_actor, new_critic, new_value, new_target_critic, info = _update_jit(
@@ -129,9 +158,39 @@ class Learner(object):
             batch, self.discount, self.tau, self.expectile, self.temperature)
 
         self.rng = new_rng
-        self.actor = new_actor
+        # self.actor = new_actor
         self.critic = new_critic
         self.value = new_value
         self.target_critic = new_target_critic
+        return info
+    
+    def update_actor(self, batch: Batch) -> InfoDict:
+        # new_actor = None
+        start = time.time()
+        info = {}
+
+        N = len(batch.observations)
+        split = int(N * 0.9)
+
+        X_train, X_test = batch.observations[:split], batch.observations[split:]
+        y_train, y_test = batch.actions[:split], batch.actions[split:]
+
+        v = self.value(X_train)
+        q1, q2 = self.critic(X_train, y_train)
+        q = jnp.minimum(q1, q2)
+        exp_a = jnp.exp((q - v) * self.temperature)
+        exp_a = jnp.minimum(exp_a, 100.0)
+
+        est = GradientBoostingRegressor(
+            n_estimators=100, learning_rate=0.1, max_depth=1, random_state=0,
+            loss='squared_error'
+        )
+        est = MultiOutputRegressor(est)
+        est.fit(X_train, y_train, sample_weight=exp_a)
+        info["gbr_mse"] = np.array(mean_squared_error(y_test, est.predict(X_test)))
+        info["time"] = np.array(time.time() - start)
+
+        self.actor_estimator = est
 
         return info
+

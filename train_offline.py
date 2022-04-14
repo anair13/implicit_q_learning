@@ -22,6 +22,7 @@ flags.DEFINE_integer('eval_episodes', 10,
                      'Number of episodes used for evaluation.')
 flags.DEFINE_integer('log_interval', 1000, 'Logging interval.')
 flags.DEFINE_integer('eval_interval', 5000, 'Eval interval.')
+flags.DEFINE_integer('actor_interval', 5000, 'Eval interval.')
 flags.DEFINE_integer('batch_size', 256, 'Mini batch size.')
 flags.DEFINE_integer('max_steps', int(1e6), 'Number of training steps.')
 flags.DEFINE_boolean('tqdm', True, 'Use tqdm progress bar.')
@@ -95,6 +96,15 @@ def main(_):
     for i in tqdm.tqdm(range(1, FLAGS.max_steps + 1),
                        smoothing=0.1,
                        disable=not FLAGS.tqdm):
+        if i % FLAGS.actor_interval == 0:
+            batch = dataset.sample(10000)
+            actor_update_info = agent.update_actor(batch)
+            for k, v in actor_update_info.items():
+                if v.ndim == 0:
+                    summary_writer.add_scalar(f'actor/{k}', v, i)
+                else:
+                    summary_writer.add_histogram(f'actor/{k}', v, i)
+
         batch = dataset.sample(FLAGS.batch_size)
 
         update_info = agent.update(batch)

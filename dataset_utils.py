@@ -6,6 +6,9 @@ import gym
 import numpy as np
 from tqdm import tqdm
 
+from numpy.random import default_rng
+rng = default_rng()
+
 Batch = collections.namedtuple(
     'Batch',
     ['observations', 'actions', 'rewards', 'masks', 'next_observations'])
@@ -60,12 +63,16 @@ class Dataset(object):
         self.size = size
 
     def sample(self, batch_size: int) -> Batch:
-        indx = np.random.randint(self.size, size=batch_size)
+        # indx = np.random.randint(self.size, size=batch_size)
+        # indx = np.random.randint(self.size, size=batch_size)
+        indx = rng.choice(self.size, size=batch_size, replace=False)
         return Batch(observations=self.observations[indx],
                      actions=self.actions[indx],
                      rewards=self.rewards[indx],
                      masks=self.masks[indx],
                      next_observations=self.next_observations[indx])
+    
+    # def sample_unique(self, batch_size)
 
 
 class D4RLDataset(Dataset):
